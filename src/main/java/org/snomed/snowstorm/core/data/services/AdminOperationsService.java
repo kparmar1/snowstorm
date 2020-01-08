@@ -8,7 +8,6 @@ import io.kaicode.elasticvc.api.VersionControlHelper;
 import io.kaicode.elasticvc.domain.Branch;
 import io.kaicode.elasticvc.domain.Commit;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
-import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import org.elasticsearch.action.update.UpdateRequest;
 import org.elasticsearch.search.sort.SortBuilders;
 import org.slf4j.Logger;
@@ -213,6 +212,76 @@ public class AdminOperationsService {
 				}
 			});
 			System.out.println();
+		}
+		return relationshipMap;
+	}
+
+	public void revertInferredRelationships(String branchPath, String previousReleaseBranch, Set<Long> conceptIds) {
+		BranchCriteria branchCriteria = versionControlHelper.getBranchCriteria(branchPath);
+		BranchCriteria previousReleaseBranchCriteria = versionControlHelper.getBranchCriteria(previousReleaseBranch);
+
+		// Load old and new versions of the given concepts.
+		Map<Long, Relationship> oldRelationships = loadRelationships(previousReleaseBranchCriteria, conceptIds);
+		Map<Long, Relationship> currentRelationships = loadRelationships(branchCriteria, conceptIds);
+
+		List<Relationship> revertedRelationshipsToSave = new ArrayList<>();
+		List<Relationship> relationshipsToDelete = new ArrayList<>();
+
+		for (Long id : currentRelationships.keySet()) {
+			Relationship currentVersion = currentRelationships.get(id);
+			Relationship oldVersion = oldRelationships.get(id);
+			if (oldVersion != null) {
+				if (!oldVersion.getEffectiveTime().equals(currentVersion.getEffectiveTime())) {
+					// Revert
+					currentVersion.setActive(oldVersion.isActive());
+					currentVersion.setModuleId(oldVersion.getModuleId());
+					currentVersion.setGroupId(oldVersion.getGroupId());
+					currentVersion.copyReleaseDetails(oldVersion);
+					currentVersion.markChanged();
+					revertedRelationshipsToSave.add(currentVersion);
+				}
+			} else {
+				// Delete
+				currentVersion.markDeleted();
+				relationshipsToDelete.add(currentVersion);
+			}
+		}
+
+		List<String> first10Ids = revertedRelationshipsToSave.subList(0, revertedRelationshipsToSave.size() > 10 ? 10 : revertedRelationshipsToSave.size())
+				.stream().map(Relationship::getRelationshipId).collect(Collectors.toList());
+		logger.info("{} relationships found on specified concepts to revert including {}", revertedRelationshipsToSave.size(), first10Ids);
+
+		List<String> first10IdsToDelete = relationshipsToDelete.subList(0, relationshipsToDelete.size() > 10 ? 10 : relationshipsToDelete.size())
+				.stream().map(Relationship::getRelationshipId).collect(Collectors.toList());
+		logger.info("{} relationships found on specified concepts to delete including {}", relationshipsToDelete.size(), first10IdsToDelete);
+
+		if (!revertedRelationshipsToSave.isEmpty() || !relationshipsToDelete.isEmpty()) {
+			try (Commit commit = branchService.openCommit(branchPath)) {
+				for (List<Relationship> batch : Lists.partition(revertedRelationshipsToSave, 1_000)) {
+					logger.info("Reverting batch of {} relationships ...", batch.size());
+					conceptUpdateHelper.doSaveBatchRelationships(batch, commit);
+				}
+				for (List<Relationship> batch : Lists.partition(relationshipsToDelete, 1_000)) {
+					logger.info("Deleting batch of {} relationships ...", batch.size());
+					conceptUpdateHelper.doSaveBatchRelationships(batch, commit);
+				}
+				commit.markSuccessful();
+			}
+			logger.info("Reversions and deletions complete.");
+		}
+	}
+
+	private Map<Long, Relationship> loadRelationships(BranchCriteria branchCriteria, Set<Long> conceptIds) {
+		Map<Long, Relationship> relationshipMap = new Long2ObjectOpenHashMap<>();
+		try (CloseableIterator<Relationship> relationships = elasticsearchTemplate.stream(new NativeSearchQueryBuilder()
+				.withQuery(boolQuery()
+						.must(branchCriteria.getEntityBranchCriteria(Relationship.class))
+						.must(termQuery(Relationship.Fields.CHARACTERISTIC_TYPE_ID, Concepts.INFERRED_RELATIONSHIP))
+						.must(termsQuery(Relationship.Fields.SOURCE_ID, conceptIds))
+				)
+				.withPageable(LARGE_PAGE)
+				.build(), Relationship.class)) {
+			relationships.forEachRemaining(relationship -> relationshipMap.put(parseLong(relationship.getRelationshipId()), relationship));
 		}
 		return relationshipMap;
 	}

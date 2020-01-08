@@ -82,6 +82,12 @@ public class AdminController {
 		adminOperationsService.rollbackCommit(BranchPathUriUtil.decodePath(branch), commitHeadTime);
 	}
 
+	@ApiOperation(value = "Revert inferred relationships for a set of concepts.")
+	@RequestMapping(value = "/{branch}/actions/revert-inferred-relationships", method = RequestMethod.POST)
+	public void revertInferredRelationships(@PathVariable String branch, @RequestParam String previousReleaseBranch, @RequestParam Set<Long> conceptIds) {
+		adminOperationsService.revertInferredRelationships(BranchPathUriUtil.decodePath(branch), previousReleaseBranch, conceptIds);
+	}
+
 	@ApiOperation(value = "Restore role group number of inactive relationships.")
 	@RequestMapping(value = "/{branch}/actions/inactive-relationships-restore-group-number", method = RequestMethod.POST)
 	public void restoreGroupNumberOfInactiveRelationships(@PathVariable String branch, @RequestParam String currentEffectiveTime, @RequestParam String previousReleaseBranch) {
