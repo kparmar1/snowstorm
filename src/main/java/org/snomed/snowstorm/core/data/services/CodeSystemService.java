@@ -6,6 +6,7 @@ import io.kaicode.elasticvc.api.PathUtil;
 import io.kaicode.elasticvc.api.VersionControlHelper;
 import io.kaicode.elasticvc.domain.Branch;
 import io.kaicode.rest.util.branchpathrewrite.BranchPathUriUtil;
+import org.elasticsearch.common.Strings;
 import org.elasticsearch.search.aggregations.AggregationBuilders;
 import org.elasticsearch.search.aggregations.bucket.MultiBucketsAggregation;
 import org.elasticsearch.search.aggregations.bucket.terms.ParsedStringTerms;
@@ -470,5 +471,20 @@ public class CodeSystemService {
 
 	protected void setLatestVersionCanBeFuture(boolean latestVersionCanBeFuture) {
 		this.latestVersionCanBeFuture = latestVersionCanBeFuture;
+	}
+
+	public CodeSystem findCodeSystemApplicableToBranch(String branchPath) {
+		if (Strings.isNullOrEmpty(branchPath)) {
+			return null;
+		}
+
+		String path = branchPath;
+		CodeSystem codeSystem = findOneByBranchPath(branchPath);
+		while (codeSystem == null && !PathUtil.isRoot(path)) {
+			path = PathUtil.getParentPath(path);
+			codeSystem = findOneByBranchPath(path);
+		}
+
+		return codeSystem;
 	}
 }

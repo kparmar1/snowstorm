@@ -11,9 +11,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 @RestController
 @Api(tags = "Admin", description = "-")
@@ -97,6 +95,12 @@ public class AdminController {
 	@RequestMapping(value = "/{branch}/actions/inactive-relationships-restore-group-number", method = RequestMethod.POST)
 	public void restoreGroupNumberOfInactiveRelationships(@PathVariable String branch, @RequestParam String currentEffectiveTime, @RequestParam String previousReleaseBranch) {
 		adminOperationsService.restoreGroupNumberOfInactiveRelationships(BranchPathUriUtil.decodePath(branch), currentEffectiveTime, previousReleaseBranch);
+	}
+
+	@ApiOperation(value = "Fix effective time on components which have been merged badly during authoring.")
+	@RequestMapping(value = "/{branch}/actions/fix-effective-time", method = RequestMethod.POST)
+	public void fixEffectiveTime(@PathVariable String branch, @RequestParam List<String> componentIds) {
+		adminOperationsService.fixEffectiveTime(new HashSet<>(componentIds), BranchPathUriUtil.decodePath(branch));
 	}
 
 }

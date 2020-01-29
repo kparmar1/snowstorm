@@ -9,15 +9,15 @@ import io.kaicode.elasticvc.domain.Branch;
 import io.kaicode.elasticvc.domain.Commit;
 import io.kaicode.elasticvc.domain.DomainEntity;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import org.apache.commons.lang.NotImplementedException;
 import org.elasticsearch.action.update.UpdateRequest;
 import org.elasticsearch.index.query.QueryBuilders;
 import org.elasticsearch.search.sort.SortBuilders;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.snomed.snowstorm.config.SearchLanguagesConfiguration;
-import org.snomed.snowstorm.core.data.domain.Concepts;
-import org.snomed.snowstorm.core.data.domain.Description;
-import org.snomed.snowstorm.core.data.domain.Relationship;
+import org.snomed.snowstorm.core.data.domain.*;
+import org.snomed.snowstorm.core.data.services.identifier.IdentifierService;
 import org.snomed.snowstorm.core.util.DescriptionHelper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
@@ -29,6 +29,7 @@ import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static io.kaicode.elasticvc.api.ComponentService.LARGE_PAGE;
@@ -244,4 +245,99 @@ public class AdminOperationsService {
 		elasticsearchTemplate.refresh(Branch.class);
 	}
 
+	public void fixEffectiveTime(Set<String> componentIds, String branchPath) {
+		Set<String> concepts = new HashSet<>();
+		Set<String> descriptions = new HashSet<>();
+		Set<String> relationships = new HashSet<>();
+		Set<String> members = new HashSet<>();
+		for (String componentId : componentIds) {
+			if (IdentifierService.isConceptId(componentId)) {
+				concepts.add(componentId);
+			} else if (IdentifierService.isDescriptionId(componentId)) {
+				descriptions.add(componentId);
+			} else if (IdentifierService.isRelationshipId(componentId)) {
+				relationships.add(componentId);
+			} else if (componentId.length() == 36 && componentId.contains("-")) {
+				members.add(componentId);
+			}
+		}
+		if (!concepts.isEmpty()) {
+			throw new NotImplementedException("Fix for concepts is not yet implemented.");
+		}
+		if (!members.isEmpty()) {
+			throw new NotImplementedException("Fix for members is not yet implemented.");
+		}
+		if (descriptions.isEmpty() && relationships.isEmpty()) {
+			throw new IllegalArgumentException("No identifiers given a recognisable format.");
+		}
+
+		CodeSystem codeSystem = codeSystemService.findCodeSystemApplicableToBranch(branchPath);
+		if (codeSystem == null) {
+			throw new IllegalStateException("No code system found for branch.");
+		}
+		CodeSystemVersion latestVersion = codeSystemService.findLatestImportedVersion(codeSystem.getShortName());
+		if (latestVersion == null) {
+			throw new IllegalStateException("No code system version found for branch.");
+		}
+		String releaseBranch = latestVersion.getBranchPath();
+
+		Set<Description> descriptionsToPersist = attemptFix(descriptions, "Description",
+				id -> descriptionService.findDescription(branchPath, id), id -> descriptionService.findDescription(releaseBranch, id));
+		Set<Relationship> relationshipsToPersist = attemptFix(relationships, "Relationship",
+				id -> relationshipService.findRelationship(branchPath, id), id -> relationshipService.findRelationship(releaseBranch, id));
+
+		if (!descriptionsToPersist.isEmpty() || !relationshipsToPersist.isEmpty()) {
+			try (Commit commit = branchService.openCommit(branchPath)) {
+				if (!descriptionsToPersist.isEmpty()) {
+					conceptUpdateHelper.doSaveBatchDescriptions(descriptionsToPersist, commit);
+				}
+				if (!relationshipsToPersist.isEmpty()) {
+					conceptUpdateHelper.doSaveBatchRelationships(relationshipsToPersist, commit);
+				}
+				commit.markSuccessful();
+			}
+		}
+		if (!descriptions.isEmpty()) {
+			logger.info("Effective time fix attempted on {} descriptions, fix applied to {} descriptions on {}.", descriptions.size(), descriptionsToPersist.size(), branchPath);
+		}
+		if (!relationships.isEmpty()) {
+			logger.info("Effective time fix attempted on {} relationships, fix applied to {} relationships on {}.", relationships.size(), relationshipsToPersist.size(), branchPath);
+		}
+	}
+
+	@SuppressWarnings("unchecked")
+	private <T extends SnomedComponent> Set<T> attemptFix(Set<String> componentIds, final String typeName,
+			Function<String, T> branchComponentSupplier, Function<String, T> releasedComponentSupplier) {
+
+		Set<T> componentsToPersist = new HashSet<>();
+		for (String descriptionId : componentIds) {
+			T descriptionToFix = branchComponentSupplier.apply(descriptionId);
+			if (descriptionToFix == null) {
+				throw new IllegalStateException(String.format(typeName + " %s not found on specified branch.", descriptionId));
+			}
+			T descriptionReleased = releasedComponentSupplier.apply(descriptionId);
+			if (descriptionReleased == null) {
+				throw new IllegalStateException(String.format(typeName + " %s not found on release branch.", descriptionId));
+			}
+			if (descriptionToFix.getEffectiveTimeI() == null && !descriptionToFix.isComponentChanged(descriptionReleased)) {
+				// description is the same as the release branch, restore effectiveTime
+				descriptionToFix.copyReleaseDetails(descriptionReleased);
+				descriptionToFix.updateEffectiveTime();
+				if (descriptionToFix.getEffectiveTimeI() != null) {
+					descriptionToFix.markChanged();
+					componentsToPersist.add(descriptionToFix);
+				}
+			}
+		}
+		return componentsToPersist;
+	}
+
+	@Autowired
+	private CodeSystemService codeSystemService;
+
+	@Autowired
+	private DescriptionService descriptionService;
+
+	@Autowired
+	private RelationshipService relationshipService;
 }
