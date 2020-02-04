@@ -46,30 +46,27 @@ public class BranchController {
 	@Autowired
 	private IntegrityService integrityService;
 
-	@ApiOperation("Retrieve all branches")
+	@ApiOperation(value = "Retrieve all branches", notes = "Metadata and status are not included in the response.")
 	@RequestMapping(value = "/branches", method = RequestMethod.GET)
 	@ResponseBody
 	public List<Branch> retrieveAllBranches() {
-		List<Branch> allBranches = branchService.findAll();
-		// Clear metadata
-		for (Branch branch : allBranches) {
-			branch.setMetadata(null);
-		}
-		return allBranches;
+		return clearMetadata(branchService.findAll());
 	}
-	
-	@ApiOperation("Retrieve branch descendants")
+
+	@ApiOperation(value = "Retrieve branch descendants", notes = "Metadata is not included in the response.")
 	@RequestMapping(value = "/branches/{path}/children", method = RequestMethod.GET)
 	@ResponseBody
 	public List<Branch> retrieveBranchDescendants(
 			@PathVariable String path,
 			@RequestParam(required = false, defaultValue = "false") boolean immediateChildren) {
-		List<Branch> descendants = branchService.findChildren(BranchPathUriUtil.decodePath(path), immediateChildren);
-		// Clear metadata
-		for (Branch branch : descendants) {
+		return clearMetadata(branchMergeService.findChildBranches(BranchPathUriUtil.decodePath(path), immediateChildren));
+	}
+
+	private List<Branch> clearMetadata(List<Branch> allBranches) {
+		for (Branch branch : allBranches) {
 			branch.setMetadata(null);
 		}
-		return descendants;
+		return allBranches;
 	}
 
 	@RequestMapping(value = "/branches", method = RequestMethod.POST)

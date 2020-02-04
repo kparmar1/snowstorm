@@ -8,6 +8,8 @@ import io.kaicode.elasticvc.domain.DomainEntity;
 import io.kaicode.elasticvc.domain.Entity;
 import org.elasticsearch.index.query.BoolQueryBuilder;
 import org.elasticsearch.index.query.QueryBuilder;
+import org.elasticsearch.index.query.QueryBuilders;
+import org.elasticsearch.search.sort.FieldSortBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.snomed.snowstorm.core.data.domain.*;
@@ -18,6 +20,7 @@ import org.snomed.snowstorm.core.data.services.pojo.IntegrityIssueReport;
 import org.snomed.snowstorm.rest.pojo.MergeRequest;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
+import org.springframework.data.elasticsearch.core.query.NativeSearchQuery;
 import org.springframework.data.elasticsearch.core.query.NativeSearchQueryBuilder;
 import org.springframework.data.elasticsearch.repository.ElasticsearchCrudRepository;
 import org.springframework.data.util.CloseableIterator;
@@ -464,5 +467,31 @@ public class BranchMergeService {
 			throw new IllegalStateException("The specified branch review is not in CURRENT status.");
 		}
 		return branchReview;
+	}
+
+	public List<Branch> findChildBranches(String path, boolean immediateChildren) {
+		NativeSearchQuery build = new NativeSearchQueryBuilder()
+				.withQuery(boolQuery()
+						.mustNot(existsQuery("end"))
+						.must(prefixQuery("path", path + "/")))
+				.withSort(new FieldSortBuilder("path"))
+				.withPageable(LARGE_PAGE)
+				.build();
+
+		List<Branch> children = elasticsearchTemplate.queryForList(build, Branch.class);
+
+		if (immediateChildren) {
+			Branch parent = branchService.findBranchOrThrow(path);
+			List<Branch> filteredBranches = new ArrayList<>();
+			children.stream().filter(parent::isParent).forEach(child -> {
+				Date parentHead = parent.getHead();
+				child.updateState(parentHead);
+				filteredBranches.add(child);
+			});
+			children = filteredBranches;
+		}
+
+		return children;
+
 	}
 }
